@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.13](https://github.com/moq-dev/web-transport/compare/web-transport-quinn-v0.11.12...web-transport-quinn-v0.11.13) - 2026-07-29
+
+### Other
+
+- Add the sans-I/O poll surface, and implement it for quinn and quiche ([#350](https://github.com/moq-dev/web-transport/pull/350))
+
 ## [0.11.12](https://github.com/moq-dev/web-transport/compare/web-transport-quinn-v0.11.11...web-transport-quinn-v0.11.12) - 2026-07-22
 
 ### Other

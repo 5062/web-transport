@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.6.1](https://github.com/moq-dev/web-transport/compare/web-transport-iroh-v0.6.0...web-transport-iroh-v0.6.1) - 2026-07-29
+
+### Other
+
+- Fix write_chunk truncation and lost accept wakers in iroh and quiche ([#349](https://github.com/moq-dev/web-transport/pull/349))
+
 ## [0.5.1](https://github.com/moq-dev/web-transport/compare/web-transport-iroh-v0.5.0...web-transport-iroh-v0.5.1) - 2026-05-24
 
 ### Other

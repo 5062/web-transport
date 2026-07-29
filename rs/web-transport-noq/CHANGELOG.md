@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.2](https://github.com/moq-dev/web-transport/compare/web-transport-noq-v0.2.1...web-transport-noq-v0.2.2) - 2026-07-29
+
+### Other
+
+- updated the following local packages: web-transport-trait
+
 ## [0.2.1](https://github.com/moq-dev/web-transport/compare/web-transport-noq-v0.2.0...web-transport-noq-v0.2.1) - 2026-07-22
 
 ### Other
