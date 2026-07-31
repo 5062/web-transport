@@ -56,5 +56,7 @@ The `web-transport-quinn` API is almost identical to the Quinn API, except that 
 
 When possible, `Deref` is used to expose the underlying Quinn API.
 However some of the API is wrapped or unavailable due to WebTransport limitations.
-- Stream IDs are not avaialble.
+- The generic traits expose optional process-local connection and stream identities.
+  A stream identity includes the underlying QUIC offset corresponding to application
+  offset zero because HTTP/3 prefixes WebTransport streams before application data.
 - Error codes are not full VarInts (62-bits) and significantly smaller.

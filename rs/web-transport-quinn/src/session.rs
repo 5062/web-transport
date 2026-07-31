@@ -217,6 +217,7 @@ impl Session {
     /// Open a new unidirectional stream. See [`quinn::Connection::open_uni`].
     pub async fn open_uni(&self) -> Result<SendStream, SessionError> {
         let mut send = self.conn.open_uni().await.map_err(|e| self.map_error(e))?;
+        let offset = self.header_uni.len() as u64;
 
         // Set the stream priority to max and then write the stream header.
         // Otherwise the application could write data with lower priority than the header, resulting in queuing.
@@ -228,12 +229,13 @@ impl Session {
 
         // Reset the stream priority back to the default of 0.
         send.set_priority(0).ok();
-        Ok(SendStream::new(send, self.error.clone(), 0))
+        Ok(SendStream::new(send, self.error.clone(), offset))
     }
 
     /// Open a new bidirectional stream. See [`quinn::Connection::open_bi`].
     pub async fn open_bi(&self) -> Result<(SendStream, RecvStream), SessionError> {
         let (mut send, recv) = self.conn.open_bi().await.map_err(|e| self.map_error(e))?;
+        let offset = self.header_bi.len() as u64;
 
         // Set the stream priority to max and then write the stream header.
         // Otherwise the application could write data with lower priority than the header, resulting in queuing.
@@ -246,7 +248,7 @@ impl Session {
         // Reset the stream priority back to the default of 0.
         send.set_priority(0).ok();
         Ok((
-            SendStream::new(send, self.error.clone(), 0),
+            SendStream::new(send, self.error.clone(), offset),
             RecvStream::new(recv, self.error.clone(), 0),
         ))
     }
@@ -555,9 +557,35 @@ impl Eq for Session {}
 type AcceptUni = dyn Stream<Item = Result<quinn::RecvStream, quinn::ConnectionError>> + Send;
 type AcceptBi = dyn Stream<Item = Result<(quinn::SendStream, quinn::RecvStream), quinn::ConnectionError>>
     + Send;
-type PendingUni = dyn Future<Output = Result<(StreamUni, quinn::RecvStream), SessionError>> + Send;
-type PendingBi = dyn Future<Output = Result<Option<(quinn::SendStream, quinn::RecvStream)>, SessionError>>
+type PendingUni =
+    dyn Future<Output = Result<(StreamUni, quinn::RecvStream, u64), SessionError>> + Send;
+type PendingBi = dyn Future<Output = Result<Option<(quinn::SendStream, quinn::RecvStream, u64)>, SessionError>>
     + Send;
+
+struct CountingReader<'a> {
+    inner: &'a mut quinn::RecvStream,
+    offset: u64,
+}
+
+impl<'a> CountingReader<'a> {
+    fn new(inner: &'a mut quinn::RecvStream) -> Self {
+        Self { inner, offset: 0 }
+    }
+}
+
+impl tokio::io::AsyncRead for CountingReader<'_> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        let before = buf.filled().len();
+        let result = Pin::new(&mut *this.inner).poll_read(cx, buf);
+        this.offset += (buf.filled().len() - before) as u64;
+        result
+    }
+}
 
 // Logic just for accepting streams, which is annoying because of the stream header.
 pub struct SessionAccept {
@@ -645,7 +673,7 @@ impl SessionAccept {
             }
 
             // Poll the list of pending streams.
-            let (typ, recv) = match self.pending_uni.poll_next_unpin(cx) {
+            let (typ, recv, offset) = match self.pending_uni.poll_next_unpin(cx) {
                 Poll::Ready(Some(Ok(res))) => res,
                 Poll::Ready(Some(Err(err))) => {
                     // Ignore the error, the stream was probably reset early.
@@ -663,7 +691,7 @@ impl SessionAccept {
             // Decide if we keep looping based on the type.
             match typ {
                 StreamUni::WEBTRANSPORT => {
-                    let recv = RecvStream::new(recv, self.error.clone(), 0);
+                    let recv = RecvStream::new(recv, self.error.clone(), offset);
                     for waker in self.uni_wakers.drain(..) {
                         waker.wake();
                     }
@@ -687,16 +715,17 @@ impl SessionAccept {
     async fn decode_uni(
         mut recv: quinn::RecvStream,
         expected_session: VarInt,
-    ) -> Result<(StreamUni, quinn::RecvStream), SessionError> {
+    ) -> Result<(StreamUni, quinn::RecvStream, u64), SessionError> {
+        let mut reader = CountingReader::new(&mut recv);
         // Read the VarInt at the start of the stream.
-        let typ = VarInt::read(&mut recv)
+        let typ = VarInt::read(&mut reader)
             .await
             .map_err(|_| WebTransportError::UnknownSession)?;
         let typ = StreamUni(typ);
 
         if typ == StreamUni::WEBTRANSPORT {
             // Read the session_id and validate it
-            let session_id = VarInt::read(&mut recv)
+            let session_id = VarInt::read(&mut reader)
                 .await
                 .map_err(|_| WebTransportError::UnknownSession)?;
             if session_id != expected_session {
@@ -705,7 +734,8 @@ impl SessionAccept {
         }
 
         // We need to keep a reference to the qpack streams if the endpoint (incorrectly) creates them, so return everything.
-        Ok((typ, recv))
+        let offset = reader.offset;
+        Ok((typ, recv, offset))
     }
 
     pub fn poll_accept_bi(
@@ -747,10 +777,10 @@ impl SessionAccept {
                 }
             };
 
-            if let Some((send, recv)) = res {
+            if let Some((send, recv, offset)) = res {
                 // Wrap the streams in our own types for correct error codes.
                 let send = SendStream::new(send, self.error.clone(), 0);
-                let recv = RecvStream::new(recv, self.error.clone(), 0);
+                let recv = RecvStream::new(recv, self.error.clone(), offset);
                 for waker in self.bi_wakers.drain(..) {
                     waker.wake();
                 }
@@ -766,8 +796,9 @@ impl SessionAccept {
         send: quinn::SendStream,
         mut recv: quinn::RecvStream,
         expected_session: VarInt,
-    ) -> Result<Option<(quinn::SendStream, quinn::RecvStream)>, SessionError> {
-        let typ = VarInt::read(&mut recv)
+    ) -> Result<Option<(quinn::SendStream, quinn::RecvStream, u64)>, SessionError> {
+        let mut reader = CountingReader::new(&mut recv);
+        let typ = VarInt::read(&mut reader)
             .await
             .map_err(|_| WebTransportError::UnknownSession)?;
         if Frame(typ) != Frame::WEBTRANSPORT {
@@ -776,14 +807,15 @@ impl SessionAccept {
         }
 
         // Read the session ID and validate it.
-        let session_id = VarInt::read(&mut recv)
+        let session_id = VarInt::read(&mut reader)
             .await
             .map_err(|_| WebTransportError::UnknownSession)?;
         if session_id != expected_session {
             return Err(WebTransportError::UnknownSession.into());
         }
 
-        Ok(Some((send, recv)))
+        let offset = reader.offset;
+        Ok(Some((send, recv, offset)))
     }
 }
 
@@ -886,6 +918,36 @@ mod tests {
         assert_eq!(client_send_id, server_send_id);
         assert_eq!(client_send_id, server_recv_id);
         assert_eq!(client_send_id.offset(), 0);
+    }
+
+    #[tokio::test]
+    async fn stream_prefix_identity_uses_transport_offsets() {
+        let (client, server, _request) = connected_sessions().await;
+
+        let expected_uni_offset = client.header_uni.len() as u64;
+        let mut client_uni = client.open_uni().await.unwrap();
+        client_uni.write_all(&[1]).await.unwrap();
+        let server_uni = server.accept_uni().await.unwrap();
+        let client_uni_id = client_uni.stream_id().unwrap();
+        let server_uni_id = server_uni.stream_id().unwrap();
+        assert_eq!(client_uni_id.id(), server_uni_id.id());
+        assert_eq!(client_uni_id.offset(), expected_uni_offset);
+        assert_eq!(server_uni_id.offset(), expected_uni_offset);
+
+        let expected_bi_offset = client.header_bi.len() as u64;
+        let (mut client_send, client_recv) = client.open_bi().await.unwrap();
+        client_send.write_all(&[1]).await.unwrap();
+        let (server_send, server_recv) = server.accept_bi().await.unwrap();
+        let client_send_id = client_send.stream_id().unwrap();
+        let client_recv_id = client_recv.stream_id().unwrap();
+        let server_send_id = server_send.stream_id().unwrap();
+        let server_recv_id = server_recv.stream_id().unwrap();
+        assert_eq!(client_send_id.id(), server_recv_id.id());
+        assert_eq!(client_send_id.offset(), expected_bi_offset);
+        assert_eq!(server_recv_id.offset(), expected_bi_offset);
+        assert_eq!(client_recv_id.id(), server_send_id.id());
+        assert_eq!(client_recv_id.offset(), 0);
+        assert_eq!(server_send_id.offset(), 0);
     }
 }
 
