@@ -195,7 +195,7 @@ impl Session {
                 .accept_uni()
                 .await
                 .map_err(|e| self.map_error(e))?;
-            Ok(RecvStream::new(recv, self.error.clone()))
+            Ok(RecvStream::new(recv, self.error.clone(), 0))
         }
     }
 
@@ -208,8 +208,8 @@ impl Session {
         } else {
             let (send, recv) = self.conn.accept_bi().await.map_err(|e| self.map_error(e))?;
             Ok((
-                SendStream::new(send, self.error.clone()),
-                RecvStream::new(recv, self.error.clone()),
+                SendStream::new(send, self.error.clone(), 0),
+                RecvStream::new(recv, self.error.clone(), 0),
             ))
         }
     }
@@ -228,7 +228,7 @@ impl Session {
 
         // Reset the stream priority back to the default of 0.
         send.set_priority(0).ok();
-        Ok(SendStream::new(send, self.error.clone()))
+        Ok(SendStream::new(send, self.error.clone(), 0))
     }
 
     /// Open a new bidirectional stream. See [`quinn::Connection::open_bi`].
@@ -246,8 +246,8 @@ impl Session {
         // Reset the stream priority back to the default of 0.
         send.set_priority(0).ok();
         Ok((
-            SendStream::new(send, self.error.clone()),
-            RecvStream::new(recv, self.error.clone()),
+            SendStream::new(send, self.error.clone(), 0),
+            RecvStream::new(recv, self.error.clone(), 0),
         ))
     }
 
@@ -663,7 +663,7 @@ impl SessionAccept {
             // Decide if we keep looping based on the type.
             match typ {
                 StreamUni::WEBTRANSPORT => {
-                    let recv = RecvStream::new(recv, self.error.clone());
+                    let recv = RecvStream::new(recv, self.error.clone(), 0);
                     for waker in self.uni_wakers.drain(..) {
                         waker.wake();
                     }
@@ -749,8 +749,8 @@ impl SessionAccept {
 
             if let Some((send, recv)) = res {
                 // Wrap the streams in our own types for correct error codes.
-                let send = SendStream::new(send, self.error.clone());
-                let recv = RecvStream::new(recv, self.error.clone());
+                let send = SendStream::new(send, self.error.clone(), 0);
+                let recv = RecvStream::new(recv, self.error.clone(), 0);
                 for waker in self.bi_wakers.drain(..) {
                     waker.wake();
                 }
@@ -831,10 +831,74 @@ impl web_transport_trait::Stats for SessionStats {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use rustls::pki_types::PrivateKeyDer;
+    use url::Url;
+    use web_transport_trait::{RecvStream as _, SendStream as _};
+
+    use super::*;
+    use crate::{ClientBuilder, ServerBuilder};
+
+    async fn connected_sessions() -> (Session, Session, ConnectRequest) {
+        let certified = rcgen::generate_simple_self_signed(["localhost".to_string()]).unwrap();
+        let certificate = certified.cert.der().clone();
+        let key = PrivateKeyDer::Pkcs8(certified.signing_key.serialize_der().into());
+        let mut server = ServerBuilder::new()
+            .with_addr("127.0.0.1:0".parse().unwrap())
+            .with_certificate(vec![certificate.clone()], key)
+            .unwrap();
+        let address = server.local_addr().unwrap();
+        let client = ClientBuilder::new()
+            .with_server_certificates(vec![certificate])
+            .unwrap();
+        let request = ConnectRequest::new(
+            Url::parse(&format!("https://localhost:{}", address.port())).unwrap(),
+        );
+
+        let server_session = async move { server.accept().await.unwrap().ok().await.unwrap() };
+        let client_session = client.connect(request.clone());
+        let (server_session, client_session) = tokio::join!(server_session, client_session);
+
+        (client_session.unwrap(), server_session, request)
+    }
+
+    #[tokio::test]
+    async fn transport_identity_matches_quinn_raw_streams() {
+        let (client, server, request) = connected_sessions().await;
+
+        let connection_id = web_transport_trait::Session::connection_id(&client).unwrap();
+        assert_eq!(connection_id.into_inner(), client.conn.stable_id() as u64);
+
+        let raw_client = Session::raw(client.conn.clone(), request.clone(), ConnectResponse::OK);
+        let raw_server = Session::raw(server.conn.clone(), request, ConnectResponse::OK);
+        let (mut client_send, client_recv) = raw_client.open_bi().await.unwrap();
+        client_send.write_all(&[1]).await.unwrap();
+        let (server_send, server_recv) = raw_server.accept_bi().await.unwrap();
+
+        let client_send_id = client_send.stream_id().unwrap();
+        let client_recv_id = client_recv.stream_id().unwrap();
+        let server_send_id = server_send.stream_id().unwrap();
+        let server_recv_id = server_recv.stream_id().unwrap();
+        assert_eq!(client_send_id.id(), u64::from(client_send.quic_id()));
+        assert_eq!(server_recv_id.id(), u64::from(server_recv.quic_id()));
+        assert_eq!(client_send_id, client_recv_id);
+        assert_eq!(client_send_id, server_send_id);
+        assert_eq!(client_send_id, server_recv_id);
+        assert_eq!(client_send_id.offset(), 0);
+    }
+}
+
 impl web_transport_trait::Session for Session {
     type SendStream = SendStream;
     type RecvStream = RecvStream;
     type Error = SessionError;
+
+    fn connection_id(&self) -> Option<web_transport_trait::ConnectionId> {
+        Some(web_transport_trait::ConnectionId::new(
+            self.conn.stable_id() as u64,
+        ))
+    }
 
     async fn accept_uni(&self) -> Result<Self::RecvStream, Self::Error> {
         Self::accept_uni(self).await

@@ -17,11 +17,20 @@ use crate::{ClosedStream, SessionError, WriteError};
 pub struct SendStream {
     stream: quinn::SendStream,
     error: Arc<OnceLock<SessionError>>,
+    offset: u64,
 }
 
 impl SendStream {
-    pub(crate) fn new(stream: quinn::SendStream, error: Arc<OnceLock<SessionError>>) -> Self {
-        Self { stream, error }
+    pub(crate) fn new(
+        stream: quinn::SendStream,
+        error: Arc<OnceLock<SessionError>>,
+        offset: u64,
+    ) -> Self {
+        Self {
+            stream,
+            error,
+            offset,
+        }
     }
 
     /// Replace connection-level errors with the stored session error if available.
@@ -149,6 +158,13 @@ impl tokio::io::AsyncWrite for SendStream {
 
 impl web_transport_trait::SendStream for SendStream {
     type Error = WriteError;
+
+    fn stream_id(&self) -> Option<web_transport_trait::StreamId> {
+        Some(web_transport_trait::StreamId::new(
+            u64::from(self.quic_id()),
+            self.offset,
+        ))
+    }
 
     fn set_priority(&mut self, order: u8) {
         Self::set_priority(self, order.into()).ok();

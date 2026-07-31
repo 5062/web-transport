@@ -14,13 +14,19 @@ use crate::{ReadError, ReadExactError, ReadToEndError, SessionError};
 pub struct RecvStream {
     inner: quinn::RecvStream,
     error: Arc<OnceLock<SessionError>>,
+    offset: u64,
 }
 
 impl RecvStream {
-    pub(crate) fn new(stream: quinn::RecvStream, error: Arc<OnceLock<SessionError>>) -> Self {
+    pub(crate) fn new(
+        stream: quinn::RecvStream,
+        error: Arc<OnceLock<SessionError>>,
+        offset: u64,
+    ) -> Self {
         Self {
             inner: stream,
             error,
+            offset,
         }
     }
 
@@ -129,6 +135,13 @@ impl tokio::io::AsyncRead for RecvStream {
 
 impl web_transport_trait::RecvStream for RecvStream {
     type Error = ReadError;
+
+    fn stream_id(&self) -> Option<web_transport_trait::StreamId> {
+        Some(web_transport_trait::StreamId::new(
+            u64::from(self.quic_id()),
+            self.offset,
+        ))
+    }
 
     fn stop(&mut self, code: u32) {
         Self::stop(self, code).ok();
