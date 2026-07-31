@@ -6,6 +6,46 @@ use std::time::Duration;
 pub use crate::util::{MaybeSend, MaybeSync};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
+/// A process-local identity for one transport connection.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ConnectionId(u64);
+
+impl ConnectionId {
+    /// Create a process-local transport connection identity.
+    pub const fn new(id: u64) -> Self {
+        Self(id)
+    }
+
+    /// Return the underlying process-local identity.
+    pub const fn into_inner(self) -> u64 {
+        self.0
+    }
+}
+
+/// A transport stream identity and its application offset base.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct StreamId {
+    id: u64,
+    offset: u64,
+}
+
+impl StreamId {
+    /// Create a transport stream identity and application offset base.
+    pub const fn new(id: u64, offset: u64) -> Self {
+        Self { id, offset }
+    }
+
+    /// Return the complete transport stream ID.
+    pub const fn id(self) -> u64 {
+        self.id
+    }
+
+    /// Return the transport offset corresponding to application offset zero.
+    pub const fn offset(self) -> u64 {
+        self.offset
+    }
+}
+
 /// Connection-level statistics.
 ///
 /// Methods return `Option` — `None` means the implementation doesn't track
@@ -80,6 +120,11 @@ pub trait Session: Clone + MaybeSend + MaybeSync + 'static {
     type RecvStream: RecvStream;
     type Error: Error;
 
+    /// Return a process-local transport connection identity, if available.
+    fn connection_id(&self) -> Option<ConnectionId> {
+        None
+    }
+
     /// Block until the peer creates a new unidirectional stream.
     fn accept_uni(&self)
         -> impl Future<Output = Result<Self::RecvStream, Self::Error>> + MaybeSend;
@@ -137,6 +182,11 @@ pub trait Session: Clone + MaybeSend + MaybeSync + 'static {
 /// The stream will be closed with a graceful FIN when dropped.
 pub trait SendStream: MaybeSend {
     type Error: Error;
+
+    /// Return the underlying transport stream identity, if available.
+    fn stream_id(&self) -> Option<StreamId> {
+        None
+    }
 
     /// Write some of the buffer to the stream, returning how many bytes were
     /// written. See [`write_buf`](Self::write_buf) for the cancel-safety contract,
@@ -251,6 +301,11 @@ pub trait SendStream: MaybeSend {
 pub trait RecvStream: MaybeSend {
     type Error: Error;
 
+    /// Return the underlying transport stream identity, if available.
+    fn stream_id(&self) -> Option<StreamId> {
+        None
+    }
+
     /// Read the next chunk of data, up to the max size.
     ///
     /// This returns a chunk of data instead of copying, which may be more efficient.
@@ -336,5 +391,127 @@ pub trait RecvStream: MaybeSend {
             }
             Ok(size)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fmt;
+
+    use super::*;
+
+    #[derive(Clone, Copy)]
+    struct TestSession;
+
+    struct TestSendStream;
+    struct TestRecvStream;
+
+    #[derive(Debug)]
+    struct TestError;
+
+    impl fmt::Display for TestError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("test error")
+        }
+    }
+
+    impl std::error::Error for TestError {}
+
+    impl Error for TestError {
+        fn session_error(&self) -> Option<(u32, String)> {
+            None
+        }
+    }
+
+    impl SendStream for TestSendStream {
+        type Error = TestError;
+
+        async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+            Ok(buf.len())
+        }
+
+        fn set_priority(&mut self, _order: u8) {}
+
+        fn finish(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn reset(&mut self, _code: u32) {}
+
+        async fn closed(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    impl RecvStream for TestRecvStream {
+        type Error = TestError;
+
+        async fn read(&mut self, _dst: &mut [u8]) -> Result<Option<usize>, Self::Error> {
+            Ok(None)
+        }
+
+        fn stop(&mut self, _code: u32) {}
+
+        async fn closed(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    impl Session for TestSession {
+        type SendStream = TestSendStream;
+        type RecvStream = TestRecvStream;
+        type Error = TestError;
+
+        async fn accept_uni(&self) -> Result<Self::RecvStream, Self::Error> {
+            Ok(TestRecvStream)
+        }
+
+        async fn accept_bi(&self) -> Result<(Self::SendStream, Self::RecvStream), Self::Error> {
+            Ok((TestSendStream, TestRecvStream))
+        }
+
+        async fn open_bi(&self) -> Result<(Self::SendStream, Self::RecvStream), Self::Error> {
+            Ok((TestSendStream, TestRecvStream))
+        }
+
+        async fn open_uni(&self) -> Result<Self::SendStream, Self::Error> {
+            Ok(TestSendStream)
+        }
+
+        fn send_datagram(&self, _payload: Bytes) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        async fn recv_datagram(&self) -> Result<Bytes, Self::Error> {
+            Ok(Bytes::new())
+        }
+
+        fn max_datagram_size(&self) -> usize {
+            0
+        }
+
+        fn close(&self, _code: u32, _reason: &str) {}
+
+        async fn closed(&self) -> Self::Error {
+            TestError
+        }
+    }
+
+    #[test]
+    fn transport_identity_value_types_round_trip() {
+        assert_eq!(ConnectionId::new(42).into_inner(), 42);
+        let stream = StreamId::new(17, 3);
+        assert_eq!(stream.id(), 17);
+        assert_eq!(stream.offset(), 3);
+    }
+
+    #[test]
+    fn transport_identity_defaults_to_unavailable() {
+        let session = TestSession;
+        let send = TestSendStream;
+        let recv = TestRecvStream;
+        assert_eq!(session.connection_id(), None);
+        assert_eq!(send.stream_id(), None);
+        assert_eq!(recv.stream_id(), None);
     }
 }
