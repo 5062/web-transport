@@ -1,6 +1,8 @@
 use bytes::{Buf, BufMut, Bytes};
 use url::Url;
 
+use web_transport_trait::{ConnectionId, StreamId};
+
 // Export the Quinn implementation to simplify Cargo.toml
 pub use web_transport_quinn as quinn;
 
@@ -111,6 +113,11 @@ pub struct Session {
 }
 
 impl Session {
+    /// Return the process-local identity of the underlying QUIC connection.
+    pub fn connection_id(&self) -> Option<ConnectionId> {
+        quinn::generic::Session::connection_id(&self.inner)
+    }
+
     /// Block until the peer creates a new unidirectional stream.
     ///
     /// Won't return None unless the connection is closed.
@@ -204,6 +211,11 @@ impl SendStream {
         Self { inner }
     }
 
+    /// Return the underlying QUIC stream identity.
+    pub fn stream_id(&self) -> Option<StreamId> {
+        quinn::generic::SendStream::stream_id(&self.inner)
+    }
+
     /// Write some of the buffer to the stream.
     #[must_use = "returns the number of bytes written"]
     pub async fn write(&mut self, buf: &[u8]) -> Result<usize, Error> {
@@ -265,6 +277,11 @@ pub struct RecvStream {
 impl RecvStream {
     fn new(inner: quinn::RecvStream) -> Self {
         Self { inner }
+    }
+
+    /// Return the underlying QUIC stream identity.
+    pub fn stream_id(&self) -> Option<StreamId> {
+        quinn::generic::RecvStream::stream_id(&self.inner)
     }
 
     /// Read the next chunk of data with the provided maximum size.

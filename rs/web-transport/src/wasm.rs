@@ -1,6 +1,8 @@
 use bytes::{Buf, BufMut, Bytes};
 use url::Url;
 
+use web_transport_trait::{ConnectionId, StreamId};
+
 pub use web_transport_wasm::CongestionControl;
 
 // Export the Wasm implementation to simplify Cargo.toml
@@ -70,6 +72,13 @@ impl Client {
 pub struct Session(web_transport_wasm::Session);
 
 impl Session {
+    /// Return the identity of the underlying connection.
+    ///
+    /// Browsers do not expose one, so this is always `None`.
+    pub fn connection_id(&self) -> Option<ConnectionId> {
+        None
+    }
+
     pub async fn accept_uni(&self) -> Result<RecvStream, Error> {
         let stream = self.0.accept_uni().await?;
         Ok(RecvStream(stream))
@@ -127,6 +136,13 @@ impl From<web_transport_wasm::Session> for Session {
 pub struct SendStream(web_transport_wasm::SendStream);
 
 impl SendStream {
+    /// Return the identity of the underlying stream.
+    ///
+    /// Browsers do not expose one, so this is always `None`.
+    pub fn stream_id(&self) -> Option<StreamId> {
+        None
+    }
+
     /// Write some of the given data to the stream.
     pub async fn write(&mut self, buf: &[u8]) -> Result<usize, Error> {
         // NOTE: web-transport-wasm writes the entire buffer.
@@ -165,6 +181,13 @@ impl SendStream {
 pub struct RecvStream(web_transport_wasm::RecvStream);
 
 impl RecvStream {
+    /// Return the identity of the underlying stream.
+    ///
+    /// Browsers do not expose one, so this is always `None`.
+    pub fn stream_id(&self) -> Option<StreamId> {
+        None
+    }
+
     /// Attempt to read a chunk of unbuffered data.
     pub async fn read(&mut self, max: usize) -> Result<Option<Bytes>, Error> {
         self.0.read(max).await
