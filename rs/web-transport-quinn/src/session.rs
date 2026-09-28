@@ -900,13 +900,11 @@ mod tests {
         let (client, server, request) = connected_sessions().await;
 
         let connection_id = web_transport_trait::Session::connection_id(&client);
-        #[cfg(feature = "moq-trace")]
+        assert!(connection_id.is_some());
         assert_eq!(
             connection_id.map(|id| id.into_inner()),
             client.conn.trace_connection_id()
         );
-        #[cfg(not(feature = "moq-trace"))]
-        assert_eq!(connection_id, None);
 
         let raw_client = Session::raw(client.conn.clone(), request.clone(), ConnectResponse::OK);
         let raw_server = Session::raw(server.conn.clone(), request, ConnectResponse::OK);
@@ -964,19 +962,11 @@ impl web_transport_trait::Session for Session {
 
     // The identity must match the one Quinn stamps on its transport events, so it
     // comes from the instrumented fork rather than `stable_id`, an address a later
-    // connection can reuse. Without the feature no transport event carries an
-    // identity, so reporting none keeps a mismatch from passing silently.
+    // connection can reuse.
     fn connection_id(&self) -> Option<web_transport_trait::ConnectionId> {
-        #[cfg(feature = "moq-trace")]
-        {
-            self.conn
-                .trace_connection_id()
-                .map(web_transport_trait::ConnectionId::new)
-        }
-        #[cfg(not(feature = "moq-trace"))]
-        {
-            None
-        }
+        self.conn
+            .trace_connection_id()
+            .map(web_transport_trait::ConnectionId::new)
     }
 
     async fn accept_uni(&self) -> Result<Self::RecvStream, Self::Error> {

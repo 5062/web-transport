@@ -19,3 +19,11 @@ web-transport-proto = { path = "rs/web-transport-proto", version = "0.6" }
 web-transport-quinn = { path = "rs/web-transport-quinn", version = "0.11", default-features = false }
 web-transport-trait = { path = "rs/web-transport-trait", version = "0.3" }
 
+# web-transport-quinn reports the connection identity of the instrumented Quinn
+# fork, so it builds only against that fork. Consumers apply their own patch; this
+# one lets the fork build and test alone.
+[patch.crates-io]
+moq-trace = { git = "https://github.com/5062/moq-trace", branch = "main" }
+quinn = { git = "https://github.com/5062/quinn", branch = "moq-trace/quinn-0.11" }
+quinn-proto = { git = "https://github.com/5062/quinn", branch = "moq-trace/quinn-0.11" }
+
