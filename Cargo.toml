@@ -23,7 +23,7 @@ web-transport-trait = { path = "rs/web-transport-trait", version = "0.3" }
 # fork, so it builds only against that fork. Consumers apply their own patch; this
 # one lets the fork build and test alone.
 [patch.crates-io]
-moq-trace = { git = "https://github.com/5062/moq-trace", branch = "main" }
+quic-trace = { git = "https://github.com/5062/moq-trace", branch = "main" }
 quinn = { git = "https://github.com/5062/quinn", branch = "moq-trace/quinn-0.11" }
 quinn-proto = { git = "https://github.com/5062/quinn", branch = "moq-trace/quinn-0.11" }
 
