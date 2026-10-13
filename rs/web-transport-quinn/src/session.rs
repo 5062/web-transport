@@ -902,7 +902,7 @@ mod tests {
         let connection_id = web_transport_trait::Session::connection_id(&client);
         assert_eq!(
             connection_id.map(|id| id.into_inner()),
-            Some(client.conn.trace_connection_id())
+            Some(client.conn.quic_trace_connection_id())
         );
 
         let raw_client = Session::raw(client.conn.clone(), request.clone(), ConnectResponse::OK);
@@ -964,7 +964,7 @@ impl web_transport_trait::Session for Session {
     // connection can reuse.
     fn connection_id(&self) -> Option<web_transport_trait::ConnectionId> {
         Some(web_transport_trait::ConnectionId::new(
-            self.conn.trace_connection_id(),
+            self.conn.quic_trace_connection_id(),
         ))
     }
 
