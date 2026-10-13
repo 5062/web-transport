@@ -900,10 +900,9 @@ mod tests {
         let (client, server, request) = connected_sessions().await;
 
         let connection_id = web_transport_trait::Session::connection_id(&client);
-        assert!(connection_id.is_some());
         assert_eq!(
             connection_id.map(|id| id.into_inner()),
-            client.conn.trace_connection_id()
+            Some(client.conn.trace_connection_id())
         );
 
         let raw_client = Session::raw(client.conn.clone(), request.clone(), ConnectResponse::OK);
@@ -964,9 +963,9 @@ impl web_transport_trait::Session for Session {
     // comes from the instrumented fork rather than `stable_id`, an address a later
     // connection can reuse.
     fn connection_id(&self) -> Option<web_transport_trait::ConnectionId> {
-        self.conn
-            .trace_connection_id()
-            .map(web_transport_trait::ConnectionId::new)
+        Some(web_transport_trait::ConnectionId::new(
+            self.conn.trace_connection_id(),
+        ))
     }
 
     async fn accept_uni(&self) -> Result<Self::RecvStream, Self::Error> {
